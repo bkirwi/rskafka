@@ -214,7 +214,7 @@ impl PartitionClient {
                     .await
                     .map_err(|e| ErrorOrThrottle::Error((e, None)))?;
                 let response = broker
-                    .request(&request)
+                    .request(request)
                     .await
                     .map_err(|e| ErrorOrThrottle::Error((e.into(), Some(gen))))?;
                 maybe_throttle(response.throttle_time_ms)?;
@@ -253,7 +253,7 @@ impl PartitionClient {
                     .await
                     .map_err(|e| ErrorOrThrottle::Error((e, None)))?;
                 let response = broker
-                    .request(&request)
+                    .request(request)
                     .await
                     .map_err(|e| ErrorOrThrottle::Error((e.into(), Some(gen))))?;
                 maybe_throttle(response.throttle_time_ms)?;
@@ -289,7 +289,7 @@ impl PartitionClient {
                     .await
                     .map_err(|e| ErrorOrThrottle::Error((e, None)))?;
                 let response = broker
-                    .request(&request)
+                    .request(request)
                     .await
                     .map_err(|e| ErrorOrThrottle::Error((e.into(), Some(gen))))?;
                 maybe_throttle(response.throttle_time_ms)?;
@@ -322,7 +322,7 @@ impl PartitionClient {
                     .await
                     .map_err(|e| ErrorOrThrottle::Error((e, None)))?;
                 let response = broker
-                    .request(&request)
+                    .request(request)
                     .await
                     .map_err(|e| ErrorOrThrottle::Error((e.into(), Some(gen))))?;
                 maybe_throttle(Some(response.throttle_time_ms))?;

@@ -78,16 +78,6 @@ where
     ) -> Result<(), WriteVersionedError>;
 }
 
-impl<'a, W: Write, T: WriteVersionedType<W>> WriteVersionedType<W> for &'a T {
-    fn write_versioned(
-        &self,
-        writer: &mut W,
-        version: ApiVersion,
-    ) -> Result<(), WriteVersionedError> {
-        T::write_versioned(self, writer, version)
-    }
-}
-
 /// Specifies a request body.
 pub trait RequestBody {
     /// The response type that will follow when issuing this request.
@@ -132,16 +122,6 @@ pub trait RequestBody {
             ApiVersion(Int16(1))
         }
     }
-}
-
-impl<T: RequestBody> RequestBody for &T {
-    type ResponseBody = T::ResponseBody;
-    const API_KEY: ApiKey = T::API_KEY;
-    const API_VERSION_RANGE: ApiVersionRange = T::API_VERSION_RANGE;
-    const FIRST_TAGGED_FIELD_IN_REQUEST_VERSION: ApiVersion =
-        T::FIRST_TAGGED_FIELD_IN_REQUEST_VERSION;
-    const FIRST_TAGGED_FIELD_IN_RESPONSE_VERSION: ApiVersion =
-        T::FIRST_TAGGED_FIELD_IN_RESPONSE_VERSION;
 }
 
 /// Read an array of versioned objects.

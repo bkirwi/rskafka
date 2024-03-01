@@ -143,7 +143,7 @@ where
         )]));
 
         // the actual request
-        tokio::time::timeout(Duration::from_millis(1), messenger.request(request))
+        tokio::time::timeout(Duration::from_millis(1), messenger.request(&request))
             .await
             .expect("request timeout")?;
 

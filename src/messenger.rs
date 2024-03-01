@@ -290,7 +290,7 @@ where
         self.version_ranges = ranges;
     }
 
-    pub async fn request<R>(&self, msg: R) -> Result<R::ResponseBody, RequestError>
+    pub async fn request<R>(&self, msg: &R) -> Result<R::ResponseBody, RequestError>
     where
         R: RequestBody + Send + WriteVersionedType<Vec<u8>>,
         R::ResponseBody: ReadVersionedType<Cursor<Vec<u8>>>,
@@ -301,7 +301,7 @@ where
 
     async fn request_with_version_ranges<R>(
         &self,
-        msg: R,
+        msg: &R,
         version_ranges: &HashMap<ApiKey, ApiVersionRange>,
     ) -> Result<R::ResponseBody, RequestError>
     where
@@ -524,12 +524,12 @@ where
         auth_bytes: Vec<u8>,
     ) -> Result<(), SaslError> {
         let req = SaslHandshakeRequest::new(mechanism);
-        let resp = self.request(req).await?;
+        let resp = self.request(&req).await?;
         if let Some(err) = resp.error_code {
             return Err(SaslError::ApiError(err));
         }
         let req = SaslAuthenticateRequest::new(auth_bytes);
-        let resp = self.request(req).await?;
+        let resp = self.request(&req).await?;
         if let Some(err) = resp.error_code {
             if let Some(s) = resp.error_message.0 {
                 debug!("Sasl auth error message: {s}");
@@ -1022,7 +1022,7 @@ mod tests {
         sim.hang_up();
 
         let err = messenger
-            .request(ListOffsetsRequest {
+            .request(&ListOffsetsRequest {
                 replica_id: NORMAL_CONSUMER,
                 isolation_level: None,
                 topics: vec![],
@@ -1044,7 +1044,7 @@ mod tests {
         sim.negative_message_size();
 
         let err = messenger
-            .request(ListOffsetsRequest {
+            .request(&ListOffsetsRequest {
                 replica_id: NORMAL_CONSUMER,
                 isolation_level: None,
                 topics: vec![],
@@ -1055,7 +1055,7 @@ mod tests {
 
         // follow-up message is broken as well
         let err = messenger
-            .request(ListOffsetsRequest {
+            .request(&ListOffsetsRequest {
                 replica_id: NORMAL_CONSUMER,
                 isolation_level: None,
                 topics: vec![],
@@ -1096,7 +1096,7 @@ mod tests {
         sim.push(msg);
 
         let actual = messenger
-            .request(ApiVersionsRequest {
+            .request(&ApiVersionsRequest {
                 client_software_name: Some(CompactString(String::new())),
                 client_software_version: Some(CompactString(String::new())),
                 tagged_fields: Some(TaggedFields::default()),
@@ -1215,7 +1215,7 @@ mod tests {
         // send first message, this task will be canceled after 3 bytes got sent.
         let task_to_cancel = (async {
             messenger
-                .request(ApiVersionsRequest {
+                .request(&ApiVersionsRequest {
                     client_software_name: Some(CompactString(String::from("foo"))),
                     client_software_version: Some(CompactString(String::from("bar"))),
                     tagged_fields: Some(TaggedFields::default()),
@@ -1243,7 +1243,7 @@ mod tests {
         // will timeout because the broker got garbage and will wait forever to read the message.
         tokio::time::timeout(Duration::from_millis(100), async {
             messenger
-                .request(ApiVersionsRequest {
+                .request(&ApiVersionsRequest {
                     client_software_name: Some(CompactString(String::from("foo"))),
                     client_software_version: Some(CompactString(String::from("bar"))),
                     tagged_fields: Some(TaggedFields::default()),
