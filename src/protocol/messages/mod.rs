@@ -4,7 +4,8 @@
 //! - <https://kafka.apache.org/protocol#protocol_messages>
 //! - <https://cwiki.apache.org/confluence/display/KAFKA/KIP-482%3A+The+Kafka+Protocol+should+Support+Optional+Tagged+Fields>
 
-use std::io::{Read, Write};
+use kafka_protocol::protocol::{Decodable, Encodable};
+use std::io::{Cursor, Read, Write};
 
 use thiserror::Error;
 
@@ -57,6 +58,16 @@ where
     fn read_versioned(reader: &mut R, version: ApiVersion) -> Result<Self, ReadVersionedError>;
 }
 
+impl<T: Decodable> ReadVersionedType<Cursor<Vec<u8>>> for T {
+    fn read_versioned(
+        reader: &mut Cursor<Vec<u8>>,
+        version: ApiVersion,
+    ) -> Result<Self, ReadVersionedError> {
+        <T as Decodable>::decode(reader, version.0 .0)
+            .map_err(|e| ReadError::Malformed(e.into()).into())
+    }
+}
+
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum WriteVersionedError {
@@ -76,6 +87,17 @@ where
         writer: &mut W,
         version: ApiVersion,
     ) -> Result<(), WriteVersionedError>;
+}
+
+impl<T: Encodable> WriteVersionedType<Vec<u8>> for T {
+    fn write_versioned(
+        &self,
+        writer: &mut Vec<u8>,
+        version: ApiVersion,
+    ) -> Result<(), WriteVersionedError> {
+        <T as Encodable>::encode(self, writer, version.0 .0)
+            .map_err(|e| WriteError::Malformed(e.into()).into())
+    }
 }
 
 /// Specifies a request body.
@@ -121,6 +143,32 @@ pub trait RequestBody {
         } else {
             ApiVersion(Int16(1))
         }
+    }
+}
+
+impl<T: kafka_protocol::protocol::Request> RequestBody for T {
+    type ResponseBody = T::Response;
+    const API_KEY: ApiKey = ApiKey::new(Int16(T::KEY));
+    const API_VERSION_RANGE: ApiVersionRange = {
+        ApiVersionRange::new(
+            ApiVersion(Int16(T::VERSIONS.min)),
+            ApiVersion(Int16(T::VERSIONS.max)),
+        )
+    };
+    // NB: we can't get this value from the upstream kafka-protocol lib, so we override
+    // the request-/response-header methods below.
+    const FIRST_TAGGED_FIELD_IN_REQUEST_VERSION: ApiVersion = ApiVersion(Int16(0));
+
+    fn request_header_version(request_version: ApiVersion) -> ApiVersion {
+        ApiVersion(Int16(T::header_version(request_version.0 .0)))
+    }
+
+    fn response_header_version(response_version: ApiVersion) -> ApiVersion {
+        ApiVersion(Int16(
+            <T::Response as kafka_protocol::protocol::HeaderVersion>::header_version(
+                response_version.0 .0,
+            ),
+        ))
     }
 }
 
