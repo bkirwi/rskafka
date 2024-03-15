@@ -127,6 +127,12 @@ pub trait RequestBody {
     const FIRST_TAGGED_FIELD_IN_RESPONSE_VERSION: ApiVersion =
         Self::FIRST_TAGGED_FIELD_IN_REQUEST_VERSION;
 
+    /// Certain requests may be only valid for a subset of the API's version range...
+    /// for example, if they set a field that was removed in a later version.
+    fn request_version_range(&self) -> ApiVersionRange {
+        Self::API_VERSION_RANGE
+    }
+
     fn request_header_version(request_version: ApiVersion) -> ApiVersion {
         if request_version < Self::FIRST_TAGGED_FIELD_IN_REQUEST_VERSION {
             ApiVersion(Int16(1))
@@ -140,6 +146,19 @@ pub trait RequestBody {
             ApiVersion(Int16(0))
         } else {
             ApiVersion(Int16(1))
+        }
+    }
+
+    /// Override the allowed versions for this API request. This is useful when a constructed
+    /// request is not valid for all versions: for example, if it includes a field that is
+    /// removed in a later version.
+    fn with_allowed_versions(self, version_range: ApiVersionRange) -> Versioned<Self>
+    where
+        Self: Sized,
+    {
+        Versioned {
+            request: self,
+            version_range,
         }
     }
 }
@@ -167,6 +186,43 @@ impl<T: kafka_protocol::protocol::Request> RequestBody for T {
                 response_version.0 .0,
             ),
         ))
+    }
+}
+
+pub struct Versioned<T> {
+    request: T,
+    version_range: ApiVersionRange,
+}
+
+impl<T: RequestBody> RequestBody for Versioned<T> {
+    type ResponseBody = T::ResponseBody;
+    const API_KEY: ApiKey = T::API_KEY;
+    const API_VERSION_RANGE: ApiVersionRange = T::API_VERSION_RANGE;
+    const FIRST_TAGGED_FIELD_IN_REQUEST_VERSION: ApiVersion =
+        T::FIRST_TAGGED_FIELD_IN_REQUEST_VERSION;
+    const FIRST_TAGGED_FIELD_IN_RESPONSE_VERSION: ApiVersion =
+        T::FIRST_TAGGED_FIELD_IN_RESPONSE_VERSION;
+
+    fn request_version_range(&self) -> ApiVersionRange {
+        self.version_range
+    }
+
+    fn request_header_version(request_version: ApiVersion) -> ApiVersion {
+        T::request_header_version(request_version)
+    }
+
+    fn response_header_version(response_version: ApiVersion) -> ApiVersion {
+        T::response_header_version(response_version)
+    }
+}
+
+impl<W: Write, T: WriteVersionedType<W>> WriteVersionedType<W> for Versioned<T> {
+    fn write_versioned(
+        &self,
+        writer: &mut W,
+        version: ApiVersion,
+    ) -> Result<(), WriteVersionedError> {
+        self.request.write_versioned(writer, version)
     }
 }
 

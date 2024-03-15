@@ -310,7 +310,7 @@ where
     {
         let body_api_version = version_ranges
             .get(&R::API_KEY)
-            .and_then(|range_server| match_versions(*range_server, R::API_VERSION_RANGE))
+            .and_then(|range_server| match_versions(*range_server, msg.request_version_range()))
             .ok_or(RequestError::NoVersionMatch {
                 api_key: R::API_KEY,
             })?;
