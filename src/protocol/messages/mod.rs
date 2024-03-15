@@ -35,8 +35,6 @@ mod list_offsets;
 pub use list_offsets::*;
 mod metadata;
 pub use metadata::*;
-mod produce;
-pub use produce::*;
 mod sasl_msg;
 use crate::protocol::primitives::Int16;
 pub use sasl_msg::*;

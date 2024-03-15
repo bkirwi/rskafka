@@ -1,3 +1,6 @@
+use crate::protocol::api_version::{ApiVersion, ApiVersionRange};
+use crate::protocol::messages::{RequestBody, Versioned};
+use crate::protocol::traits::WriteType;
 use crate::{
     backoff::{Backoff, BackoffConfig, ErrorOrThrottle},
     client::error::{Error, RequestContext, Result},
@@ -13,8 +16,7 @@ use crate::{
             DeleteRequestTopic, DeleteResponsePartition, FetchRequest, FetchRequestPartition,
             FetchRequestTopic, FetchResponse, FetchResponsePartition, IsolationLevel,
             ListOffsetsRequest, ListOffsetsRequestPartition, ListOffsetsRequestTopic,
-            ListOffsetsResponse, ListOffsetsResponsePartition, ProduceRequest,
-            ProduceRequestPartitionData, ProduceRequestTopicData, ProduceResponse, NORMAL_CONSUMER,
+            ListOffsetsResponse, ListOffsetsResponsePartition, NORMAL_CONSUMER,
         },
         primitives::*,
         record::{Record as ProtocolRecord, *},
@@ -25,6 +27,11 @@ use crate::{
 };
 use async_trait::async_trait;
 use chrono::{LocalResult, TimeZone, Utc};
+use indexmap::indexmap;
+use kafka_protocol::messages::produce_request::{PartitionProduceData, TopicProduceData};
+use kafka_protocol::messages::{ProduceRequest, ProduceResponse, TopicName};
+use kafka_protocol::protocol::StrBytes;
+use std::default::Default;
 use std::{
     ops::{ControlFlow, Deref, Range},
     sync::Arc,
@@ -217,7 +224,10 @@ impl PartitionClient {
                     .request(request)
                     .await
                     .map_err(|e| ErrorOrThrottle::Error((e.into(), Some(gen))))?;
-                maybe_throttle(response.throttle_time_ms)?;
+                maybe_throttle(match response.throttle_time_ms {
+                    0 => None,
+                    n => Some(Int32(n)),
+                })?;
                 process_produce_response(self.partition, &self.topic, n, response)
                     .map_err(|e| ErrorOrThrottle::Error((e, Some(gen))))
             },
@@ -648,13 +658,15 @@ fn build_produce_request(
     topic: &str,
     records: Vec<Record>,
     compression: Compression,
-) -> ProduceRequest {
+) -> Versioned<ProduceRequest> {
     let n = records.len() as i32;
 
     // TODO: Retry on failure
 
     let first_timestamp = records.first().unwrap().timestamp;
     let mut max_timestamp = first_timestamp;
+
+    let mut buf = vec![];
 
     let records = records
         .into_iter()
@@ -676,43 +688,57 @@ fn build_produce_request(
         })
         .collect();
 
-    let record_batch = ProduceRequestPartitionData {
-        index: Int32(partition),
-        records: Records(vec![RecordBatch {
-            base_offset: 0,
-            partition_leader_epoch: 0,
-            last_offset_delta: n - 1,
-            is_transactional: false,
-            base_sequence: -1,
-            compression: match compression {
-                Compression::NoCompression => RecordBatchCompression::NoCompression,
-                #[cfg(feature = "compression-gzip")]
-                Compression::Gzip => RecordBatchCompression::Gzip,
-                #[cfg(feature = "compression-lz4")]
-                Compression::Lz4 => RecordBatchCompression::Lz4,
-                #[cfg(feature = "compression-snappy")]
-                Compression::Snappy => RecordBatchCompression::Snappy,
-                #[cfg(feature = "compression-zstd")]
-                Compression::Zstd => RecordBatchCompression::Zstd,
-            },
-            timestamp_type: RecordBatchTimestampType::CreateTime,
-            producer_id: -1,
-            producer_epoch: -1,
-            first_timestamp: first_timestamp.timestamp_millis(),
-            max_timestamp: max_timestamp.timestamp_millis(),
-            records: ControlBatchOrRecords::Records(records),
-        }]),
+    let records = RecordBatch {
+        base_offset: 0,
+        partition_leader_epoch: 0,
+        last_offset_delta: n - 1,
+        is_transactional: false,
+        base_sequence: -1,
+        compression: match compression {
+            Compression::NoCompression => RecordBatchCompression::NoCompression,
+            #[cfg(feature = "compression-gzip")]
+            Compression::Gzip => RecordBatchCompression::Gzip,
+            #[cfg(feature = "compression-lz4")]
+            Compression::Lz4 => RecordBatchCompression::Lz4,
+            #[cfg(feature = "compression-snappy")]
+            Compression::Snappy => RecordBatchCompression::Snappy,
+            #[cfg(feature = "compression-zstd")]
+            Compression::Zstd => RecordBatchCompression::Zstd,
+        },
+        timestamp_type: RecordBatchTimestampType::CreateTime,
+        producer_id: -1,
+        producer_epoch: -1,
+        first_timestamp: first_timestamp.timestamp_millis(),
+        max_timestamp: max_timestamp.timestamp_millis(),
+        records: ControlBatchOrRecords::Records(records),
     };
 
-    ProduceRequest {
-        transactional_id: crate::protocol::primitives::NullableString(None),
-        acks: Int16(-1),
-        timeout_ms: Int32(30_000),
-        topic_data: vec![ProduceRequestTopicData {
-            name: String_(topic.to_string()),
-            partition_data: vec![record_batch],
-        }],
-    }
+    records.write(&mut buf).expect("valid write");
+
+    let mut partition_data = PartitionProduceData::default();
+    partition_data.index = partition;
+    partition_data.records = Some(buf.into());
+
+    let mut request = ProduceRequest::default();
+    request.transactional_id = None;
+    request.acks = -1;
+    request.timeout_ms = 30_000;
+    request.topic_data = indexmap! {
+        TopicName(StrBytes::from_string(topic.to_string())) => {
+            let mut data = TopicProduceData::default();
+            data.partition_data = vec![partition_data];
+            data
+        }
+    };
+
+    // Note that we do not support produce request prior to version 3, since this is the version when message version 2
+    // was introduced ([KIP-98]).
+    //
+    // [KIP-98]: https://cwiki.apache.org/confluence/display/KAFKA/KIP-98+-+Exactly+Once+Delivery+and+Transactional+Messaging
+    request.with_allowed_versions(ApiVersionRange::new(
+        ApiVersion(Int16(3)),
+        ApiVersion(Int16(7)),
+    ))
 }
 
 fn process_produce_response(
@@ -721,15 +747,16 @@ fn process_produce_response(
     num_records: i64,
     response: ProduceResponse,
 ) -> Result<Vec<i64>> {
-    let response = response
+    let (name, response) = response
         .responses
         .exactly_one()
         .map_err(Error::exactly_one_topic)?;
 
-    if response.name.0 != topic {
+    if name.as_str() != topic {
         return Err(Error::InvalidResponse(format!(
             "Expected write for topic \"{}\" got \"{}\"",
-            topic, response.name.0,
+            topic,
+            name.as_str(),
         )));
     }
 
@@ -738,14 +765,14 @@ fn process_produce_response(
         .exactly_one()
         .map_err(Error::exactly_one_partition)?;
 
-    if response.index.0 != partition {
+    if response.index != partition {
         return Err(Error::InvalidResponse(format!(
             "Expected partition {} for topic \"{}\" got {}",
-            partition, topic, response.index.0,
+            partition, topic, response.index,
         )));
     }
 
-    match response.error {
+    match ProtocolError::new(response.error_code) {
         Some(e) => Err(Error::ServerError {
             protocol_error: e,
             error_message: None,
@@ -753,9 +780,7 @@ fn process_produce_response(
             response: None,
             is_virtual: false,
         }),
-        None => Ok((0..num_records)
-            .map(|x| x + response.base_offset.0)
-            .collect()),
+        None => Ok((0..num_records).map(|x| x + response.base_offset).collect()),
     }
 }
 
