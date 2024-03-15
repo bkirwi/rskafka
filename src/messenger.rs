@@ -51,7 +51,7 @@ struct Response {
 #[derive(Debug)]
 struct ActiveRequest {
     channel: Sender<Result<Response, RequestError>>,
-    use_tagged_fields_in_response: bool,
+    response_header_version: ApiVersion,
 }
 
 #[derive(Debug)]
@@ -237,7 +237,7 @@ where
                         };
 
                         // optionally read tagged fields from the header as well
-                        if active_request.use_tagged_fields_in_response {
+                        if active_request.response_header_version >= ApiVersion(Int16(1)) {
                             header.tagged_fields = match TaggedFields::read(&mut cursor) {
                                 Ok(fields) => Some(fields),
                                 Err(e) => {
@@ -315,15 +315,6 @@ where
                 api_key: R::API_KEY,
             })?;
 
-        // determine if our request and response headers shall contain tagged fields. This system is borrowed from
-        // rdkafka ("flexver"), see:
-        // - https://github.com/edenhill/librdkafka/blob/2b76b65212e5efda213961d5f84e565038036270/src/rdkafka_request.c#L973
-        // - https://github.com/edenhill/librdkafka/blob/2b76b65212e5efda213961d5f84e565038036270/src/rdkafka_buf.c#L167-L174
-        let use_tagged_fields_in_request =
-            body_api_version >= R::FIRST_TAGGED_FIELD_IN_REQUEST_VERSION;
-        let use_tagged_fields_in_response =
-            body_api_version >= R::FIRST_TAGGED_FIELD_IN_RESPONSE_VERSION;
-
         // Correlation ID so that we can de-multiplex the responses.
         let correlation_id = self.correlation_id.fetch_add(1, Ordering::SeqCst);
 
@@ -336,11 +327,7 @@ where
             client_id: Some(NullableString(Some(String::from(self.client_id.as_ref())))),
             tagged_fields: Some(TaggedFields::default()),
         };
-        let header_version = if use_tagged_fields_in_request {
-            ApiVersion(Int16(2))
-        } else {
-            ApiVersion(Int16(1))
-        };
+        let header_version = R::request_header_version(body_api_version);
 
         let mut buf = Vec::new();
         header
@@ -361,7 +348,7 @@ where
                     correlation_id,
                     ActiveRequest {
                         channel: tx,
-                        use_tagged_fields_in_response,
+                        response_header_version: R::response_header_version(body_api_version),
                     },
                 );
             }

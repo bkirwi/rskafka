@@ -37,7 +37,9 @@ pub use metadata::*;
 mod produce;
 pub use produce::*;
 mod sasl_msg;
+use crate::protocol::primitives::Int16;
 pub use sasl_msg::*;
+
 #[cfg(test)]
 mod test_utils;
 
@@ -114,6 +116,22 @@ pub trait RequestBody {
     /// there are some special snowflakes.
     const FIRST_TAGGED_FIELD_IN_RESPONSE_VERSION: ApiVersion =
         Self::FIRST_TAGGED_FIELD_IN_REQUEST_VERSION;
+
+    fn request_header_version(request_version: ApiVersion) -> ApiVersion {
+        if request_version < Self::FIRST_TAGGED_FIELD_IN_REQUEST_VERSION {
+            ApiVersion(Int16(1))
+        } else {
+            ApiVersion(Int16(2))
+        }
+    }
+
+    fn response_header_version(response_version: ApiVersion) -> ApiVersion {
+        if response_version < Self::FIRST_TAGGED_FIELD_IN_RESPONSE_VERSION {
+            ApiVersion(Int16(0))
+        } else {
+            ApiVersion(Int16(1))
+        }
+    }
 }
 
 impl<T: RequestBody> RequestBody for &T {
