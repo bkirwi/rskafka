@@ -70,8 +70,8 @@ pub enum ApiKey {
     Unknown(Int16),
 }
 
-impl From<Int16> for ApiKey {
-    fn from(key: Int16) -> Self {
+impl ApiKey {
+    pub const fn new(key: Int16) -> Self {
         match key.0 {
             0 => Self::Produce,
             1 => Self::Fetch,
@@ -134,6 +134,12 @@ impl From<Int16> for ApiKey {
             67 => Self::AllocateProducerIds,
             _ => Self::Unknown(key),
         }
+    }
+}
+
+impl From<Int16> for ApiKey {
+    fn from(value: Int16) -> Self {
+        ApiKey::new(value)
     }
 }
 
